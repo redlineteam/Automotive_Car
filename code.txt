@@ -1,0 +1,1174 @@
+//CHUONG TRINH DIEU KHIEN XE TU LAI VERSION 2.0
+//-----------------------------------------------------------------------------------------------
+#include <Servo.h>
+#include <LineScanCamera.h>
+#include <PID_v1.h>
+#include <ArduinoJson.h>
+
+#define FORWARD 2           // Lua chon cho xe tien
+#define BACKWARD 1          // Lua chon cho xe lui
+#define LEFT 4              // Lua chon ben trai
+#define RIGHT 3             // Lua chon ben phai
+#define MID 0               // Lua chon o giua
+#define AOpin  A0           // Camera - Analog output 
+#define SIpin  7            // Camera - Start Integration
+#define CLKpin 6            // Camera - Clock
+#define Horn 13             // Coi
+#define li_head 46          // Den truoc
+#define li_rear 50          // Den sau
+#define li_L 48             // Xinhan Left
+#define li_R 52             // Xinhan Right      
+#define trig_mid 40  // Thiet lap chan doc cam bien sieu am giua
+#define echo_mid 38   
+#define trig_L 36    // Thiet lap chan doc cam bien sieu am trai
+#define echo_L 34    
+#define trig_R 42    // Thiet lap chan doc cam bien sieu am phai
+#define echo_R 44     
+#define HN A1        // Thiet lap chan cam bien hong ngoai
+#define CP A2        // Thiet lap chan nut check point
+#define M_directionL  8   // Direction DC motor left
+#define M_directionR  10  // Direction DC motor right
+#define M_L_pin  12       // PWM DC motor Left
+#define M_R_pin  11       // PWM DC motor Right
+#define S_lai_pin  9      // Servo lai
+#define wifi_reset  4     // ESP 8266
+#define batt_vol  A3      // Dien ap pin
+
+LineScanCamera myCam(SIpin,CLKpin,AOpin,6500);// Thiet lap camera do lai
+Servo myservo1;           // Tao doi tuong dieu khien Servo lai
+
+//-------------------------------------------------------------------------------------------------
+byte Steering_balance = 60; // Gia tri goc lai can bang
+byte Steering_limit = 40;   // Gioi han goc lai
+unsigned int en_L =0;       // Luu gia tri doc encoder left
+unsigned int en_R = 0;      // Luu gia tri doc encoder right
+
+byte count1 = 0;            // Dem so lan lap func Camera_line_detect
+int* Pixel;                 // Mang luu gia tri camera scan
+int WD_max = 50;            // Gia tri ban dau max lai trang
+int deltaL = 10;            // He so ban dau phat hien lai trai
+int deltaR = 10;            // He so ban dau phat hien lai phai
+byte Start_point_L = 60;    // Diem xuat phat can trai
+byte Mid_L = 34;            // Diem giua can trai  Mid:34 
+byte End_point_L = 20;      // Diem ket thuc can trai
+byte Start_point_R = 70;    // Diem xuat phat can phai
+byte Mid_R = 93;            // Diem giua can phai Mid:93
+byte End_point_R = 105;     // Diem ket thuc can phai
+byte detect_val_L,detect_val_R; // Gia tri phat hien lai trang trai, phai
+bool Horizon_line = 0;  // Phat hien lai ngang
+float gain = 0.6;       // He so cat lai trang
+int W_cut = 100;        // Gia tri cat lai trang
+int W_line;             // So luong diem anh lai trang
+int W_line_detect = 30; // So luong diem anh phat hien lai trang
+
+double Setpoint, Input, Output; // Cai dat thong so PID LineDriving
+double Kp_LR = 1.3, Ki_LR = 1, Kd_LR = 0; //P:1.3 I:1 D:0
+PID myPID(&Input, &Output, &Setpoint, Kp_LR, Ki_LR, Kd_LR, REVERSE);// Thiet lap PID LineDriving
+float Kp1L = 2;     // He so P dieu chinh goc lai trai, phai 
+float Kp1R = 2;
+float Ki1L = 0;     // He so I dieu chinh goc lai trai, phai
+float Ki1R = 0;
+float Kp2L = 0.5;   // He so P giam toc do 2 banh khi lai 
+float Kp2R = 0.5;
+float Kp3L = 0.5;   // He so P visai khi lai
+float Kp3R = 0.5;
+
+int ACC_Kp = 10;           // He so P giam toc do Adaptive cruise control
+int ACC_reduce = 5;        // He so giam toc do xe giu khoang cach
+int ACC_increase_stop = 4; // He so tang toc xe sau khi dung
+int ACC_increase_out = 2;  // He so tang toc xe khi xe truoc out range
+float ACC_delta = 0.33;    // He so khoang cach detect object theo toc do xe
+float dis_prev;            // Khoang cach do truoc do
+bool check_ACC;            // Kiem tra xe chay truoc tang toc
+bool check_ACC2;           // Kiem tra xe chay truoc vuot khoang cach khi stop
+bool check_ACC3;           // Kiem tra xe chay truoc vuot khoang cach 
+byte dem_increase=0;       // Dem gia tri xe chay truoc tang toc
+bool check_increase=0;     // Kiem tra xe chay truoc tang toc
+byte dem_out_dis=0;        // Dem gia tri xe chay truoc vuot khoang cach khi stop
+byte dem_out_dis2=0;       // Diem gia tri xe chay truoc vuot khoang cach 
+bool car_stop=0;           // Kiem tra xe dung
+bool in_range=0;           // Kiem tra chuong ngai vat nam trong khoang detect
+
+bool Auto_P=0;     // Kiem tra kich hoat chuc nang tu do xe
+byte P_pos = 0;    // Vi tri do xe 1: ben phai 2: ben trai
+int disL,disR;     // Khoang cach do tim vi tri do xe ben trai, phai
+bool Find_PL = 0;  // Kiem tra do tim vi tri do xe ben trai
+bool Find_PR = 0;  // Kiem tra do tim vi tri do xe ben phai
+int SpaceR;        // Khoang trong do xe ben phai
+int SpaceL;        // Khoang trong do xe ben phai
+int DangerR;       // Vat can do xe ben phai
+int DangerL;       // Vat can do xe ben trai
+int dem_PL = 0;    // Dem so lan do tim khoang trong do xe ben trai
+int dem_PR = 0;    // Dem so lan do tim khoang trong do xe ben phai
+int Danger_rear;   // Vat can phia sau
+int dem_lineP = 0; // Vach vao bai do xe
+
+unsigned long previousMillis=0;   // Bien khoi dau cruise control system interval
+unsigned long previousMillis2=0;  // Bien khoi dau car moving interval
+unsigned long previousMillis3=0;  // Bien khoi dau wifi function
+float sp_L;             // Toc do banh xe ben trai
+float sp_R;             // Toc do banh xe ben phai
+float sp_tb;            // Toc do trung binh
+float CCS_Kp = 0.5;     // He so P cruise control system
+int CCS_out = 0;        // Gia tri dau ra cruise control system
+byte xn;                // Chon xinhan trai = 0, phai = 1
+byte ttxn;              // Trang thai den xinhan 0 = OFF, 1 = ON
+int speed_car = 120;    // Toc do xe ban dau
+int speed_hold = 21;    // Toc do ACC 
+int pos = 1;            // Vi tri cua xe tren tung doan duong Start:1 
+float voltage;          // Dien ap pin
+byte dem_vol = 0;       // Dem cong don dien ap
+float tong_vol = 0;     // Tong dien ap
+float delta_V = 0.9;    // He so dieu chinh toc do xe theo dien ap pin
+int check_point = 0;    // Diem xuat phat cua xe
+
+byte dir;                // Huong di chuyen cua xe
+byte ag;                 // Goc lai
+byte st;                 // Huong re
+byte sp = 0;             // Toc do xe
+byte detail = 0;         // Thong tin chi tiet
+int dis1 = 0;            // Khoang cach phia truoc
+byte Mode = 0;           // Che do hoat dong cua xe
+byte Move = 0;           // Xe di chuyen
+byte temp;               // Bien tam thoi
+String output = "";      // Luu du lieu gui ve tu webserver
+char input;              // Doc ki tu gui ve tu webserver 
+int server_out = 0;      // Dem so lan du lieu gui len webserver
+byte interval_CCS = 100; // Chu ki hoat dong cua cruise control
+int dem_s;               // Dem quang duong xe chay sau checkpoint 1
+
+//-------------------------------------------------------------------------------------------------
+// Thiet lap dieu khien dong co DC L-R
+void Set_up_DCmotor(){
+  pinMode(M_directionL,OUTPUT);             // Digital
+  pinMode(M_directionR,OUTPUT);             // Digital
+  pinMode(M_L_pin,OUTPUT);                  // PWM
+  pinMode(M_R_pin,OUTPUT);                  // PWM
+  Serial.println("Setup DC motor OK");
+}
+// Thiet lap dong co Servo
+void Set_up_servo(){
+  myservo1.attach(S_lai_pin); // Khoi tao chan xuat tin hieu dieu khien servo lai
+  Serial.println("Setup servo OK");
+}
+// Thiet lap encoder L-R
+void Set_up_encoder(){
+  attachInterrupt(0,ct1,FALLING);// Khoi tao chan ngat ngoai INT0 (pin 2 ) - Kenh A encoder left
+  attachInterrupt(1,ct2,FALLING);// Khoi tao chan ngat ngoai INT1 (pin 3 ) - Kenh A encoder right
+  Serial.println("Setup encoder OK");
+}
+// Thiet lap den
+void Set_up_light_horn(){
+  pinMode(li_head,OUTPUT);
+  pinMode(li_rear,OUTPUT);
+  pinMode(li_L,OUTPUT);
+  pinMode(li_R,OUTPUT);
+  pinMode(Horn,OUTPUT);
+  Serial.println("Setup light, horn OK");
+}
+// Thiet lap cam bien sieu am
+void Set_up_cbsa(){
+  pinMode(trig_mid,OUTPUT);
+  pinMode(echo_mid,INPUT);
+  pinMode(trig_L,OUTPUT);
+  pinMode(echo_L,INPUT);
+  pinMode(trig_R,OUTPUT);
+  pinMode(echo_R,INPUT);
+  Serial.println("Setup cam bien sieu am OK");
+}
+// Thiet lap wifi ESP8266
+void Set_up_wifi()
+{
+  pinMode(wifi_reset,1);
+  digitalWrite(wifi_reset,1);
+  Serial.println("Setup wifi OK");
+}
+
+// Thiet lap PID Linedriving
+void Set_up_PID()
+{
+  myPID.SetMode(AUTOMATIC);      // Kich hoat PID LineDriving
+  myPID.SetOutputLimits(-50,50); // Thiet lap gioi han dieu chinh PID
+  myPID.SetSampleTime(10);       // Thiet lap thoi gian lay mau PID
+  Serial.println("Setup PID Linedriving OK");
+}
+
+//-----------------------------------------------------------------------------------------------
+/* Chuong trinh dieu khien xe moving Ver 1.0 - 12/05/2017
+*  S_direction: Huong quay vong: LEFT (3), RIGHT (4)
+*  S_angle: Goc quay vong (0-Steering_limit) 
+*  Move_direction: Chieu chuyen dong cua xe: FORWARD (1), BACKWARD (2)
+*  Left_speed: PWM banh xe ben trai (0-255)
+*  Right_speed: PWM banh xe ben phai (0-255) 
+*/
+void Car_moving(byte S_direction,byte S_angle,byte Move_direction,byte left_speed,byte right_speed)
+{
+if(Move_direction==1) {
+  dir = BACKWARD;
+  digitalWrite(M_directionL,1);
+  digitalWrite(M_directionR,1);
+  analogWrite(M_L_pin,255-left_speed);
+  analogWrite(M_R_pin,255-right_speed);  
+}
+if(Move_direction==2) {
+  dir = FORWARD;
+  digitalWrite(M_directionL,0);
+  digitalWrite(M_directionR,0);
+  analogWrite(M_L_pin,left_speed);
+  analogWrite(M_R_pin,right_speed);  
+}
+  if(S_angle>Steering_limit) S_angle=Steering_limit;            
+  if(S_direction==4) 
+  {
+    myservo1.write(Steering_balance-S_angle);
+    st = LEFT; ag = S_angle;
+  }
+  if(S_direction==3) 
+  {
+    myservo1.write(Steering_balance+S_angle);
+    st = RIGHT; ag = S_angle;
+  }
+}
+
+// Chuong trinh phuc vu ngat ngoai INT0 (encoder left )
+void ct1(){en_L++;}
+// Chuong trinh phuc vu ngat ngoai INT1 (encoder right )
+void ct2(){en_R++;}
+
+/* Chuong trinh tinh khoang cach cam bien sieu am Version 1.0 25/05/2017
+ *  chanel: chon cam bien can do LEFT, MID, RIGHT
+ *  over_time: thoi gian toi da us (neu thoi gian do duoc lon hon thi ket qua tra ve 0 )
+*/
+float Distance(byte chanel,unsigned long over_time){
+  unsigned long tg; // Luu gia tri thoi gian tra ve tu cam bien sieu am   
+  float kc;         // Luu gia tri khoang cach
+  switch (chanel)
+  {
+    case 0: // Doc cam bien sieu am phia truoc
+    {
+    digitalWrite(trig_mid,0);
+    delayMicroseconds(2);
+    digitalWrite(trig_mid,1);
+    delayMicroseconds(5);
+    digitalWrite(trig_mid,0);
+    tg = pulseIn(echo_mid,HIGH,over_time);// Do thoi gian phan hoi song sieu am  
+    break;
+    }
+     case 4: // Doc cam bien sieu am ben phai
+    {
+    digitalWrite(trig_L,0);
+    delayMicroseconds(2);
+    digitalWrite(trig_L,1);
+    delayMicroseconds(5);
+    digitalWrite(trig_L,0);
+    tg = pulseIn(echo_L,HIGH,over_time);// Do thoi gian phan hoi song sieu am  
+    break;
+    }
+     case 3: // Doc cam bien sieu am ben trai
+    {
+    digitalWrite(trig_R,0);
+    delayMicroseconds(2);
+    digitalWrite(trig_R,1);
+    delayMicroseconds(5);
+    digitalWrite(trig_R,0);
+    tg = pulseIn(echo_R,HIGH,over_time);// Do thoi gian phan hoi song sieu am  
+    break;
+    }
+  }
+  if(tg>0) kc = tg/2.0/29.412;else kc=300;// Tinh khoang cach
+  return kc;
+}
+
+/* Chuong trinh tim lai trang Ver 1.0 - 17/05/2017
+* delta_L: do doc phat hien lai trang ben trai 
+* delta_R: do doc phat hien lai trang ben phai
+*/
+void Camera_line_detect(byte delta_L, byte delta_R){
+  int i;
+  detect_val_L = 0;
+  count1++;
+  if(count1 == 2)
+  {
+    deltaL = WD_max/5;   // Tinh gia tri do doc phat hien lai trang ben trai theo gia tri max
+    deltaR = WD_max/5;   // Tinh gia tri do doc phat hien lai trang ben phai theo gia tri max
+    W_cut = WD_max*gain; // Tinh gia tri phat hien lai trang ngang theo gia tri max
+    WD_max = 0;
+    count1 = 1;
+  }
+  W_line = 0;
+  for(i = 0; i < 128 ; i++) // Tim gia tri max
+  {
+    if(Pixel[i] > WD_max) WD_max = Pixel[i];
+    if(Pixel[i] > W_cut) W_line++;
+  }
+  if(W_line > W_line_detect) Horizon_line = 1;else Horizon_line = 0; // Phat hien lai trang ngang
+  for(i = Start_point_L-1; i >= End_point_L; i--)                    // Do tim lai trang ben trai
+  {
+      if(Pixel[i] - Pixel[i+1] >= delta_L) {detect_val_L = i;break;}
+  }
+  detect_val_R = 0;
+  for(i = Start_point_R+1; i <= End_point_R; i++)                    // Do tim lai trang ben phai
+  {
+      if(Pixel[i] - Pixel[i-1] >= delta_R) {detect_val_R = i;break;}
+  }
+}
+
+// Chuong trinh xu ly anh camera tinh goc lai Ver 2.0 - 16/05/2017
+int St_ag_processing(){
+  int angle,agL,agR;
+  Pixel = myCam.read();              // Doc camera
+  Camera_line_detect(deltaL,deltaR); // Tim lai trang trai, phai
+  
+  if(detect_val_L > 0)    // Tinh goc lai theo lai trang ben trai
+  {
+    Setpoint = Mid_L;
+    Input = detect_val_L;
+    myPID.Compute();
+    agL = Output;
+  }
+  if(detect_val_R > 0)    // Tinh goc lai theo lai trang ben phai
+  {
+    Setpoint = Mid_R;
+    Input = detect_val_R;
+    myPID.Compute();
+    agR = Output;
+  }
+  if(detect_val_L > 0 && detect_val_R > 0) angle = (agL + agR)/2; // Tinh goc lai trung binh
+  else if(detect_val_L > 0) angle = agL;
+  else angle = agR;
+  return angle;
+}
+
+/* Chuong trinh xe do lai tu hanh Ver 1.0 - 14/05/2017
+   Speed: toc do xe (0-255)
+*/
+void Line_driving(byte speed_){
+  byte speed_2 = speed_;
+  int angle = St_ag_processing(); // Tinh goc lai
+  
+  if(speed_>0)
+  {
+    if(angle < 0)
+    {
+      //speed_2 = speed_ - abs(angle)*Kp2L;                                  // Giam toc do xe khi re trai 
+      Car_moving(LEFT,abs(angle),FORWARD,speed_2 - abs(angle)*Kp3L,speed_2); // Xe re trai
+    }
+    else if(angle > 0)
+    {
+    //speed_2 = speed_ - angle*Kp2R;                                         // Giam toc do xe khi re phai  
+    Car_moving(RIGHT,angle,FORWARD,speed_2,speed_2 - angle*Kp3R);            // Xe re phai 
+    }
+    else Car_moving(LEFT,0,FORWARD,speed_,speed_);                           // Xe chay thang 
+  }
+  else Car_moving(LEFT,0,FORWARD,0,0);                                       // Xe dung
+}
+
+/* Chuong trinh dieu khien Adaptive cruise control Ver 1.0 - 07/06/2017
+ * dis_hold: cai dat khoang cach (cm )
+ * sp_hold: cai dat toc do (cm/s )
+ */
+ void ACC(byte dis_hold, byte sp_hold)
+ {
+  float dis_real;
+  float dis_detect;
+  float er;
+  int v_increase;
+  byte dis_noise;
+ 
+  check_ACC = 1;check_ACC2 = 1;check_ACC3 = 1; // Cai dat thong so ban dau
+  dis_real = Distance(MID,6400);               // Do khoang cach phia truoc
+  dis_detect = dis_hold + sp_hold*ACC_delta;   // Tinh khoang cach phat hien xe phia truoc
+  if(dis_real < 300) dis1 = dis_real;
+  // Chuong trinh giam toc do xe
+  if(dis_real < 13)  {speed_car=0;digitalWrite(li_rear,1);car_stop=1;} // Xe dung khan cap khi khoang cach < 13 cm
+  if(dis_real < dis_detect && car_stop!=1)                             // Neu khoang cach nam trong gioi han phat hien va xe khong stop
+  {
+    check_ACC3 = 0;
+    in_range = 1;
+    er = dis_real - dis_hold;   // Tinh sai so khoang cai dat va khoang cach thuc te
+    if(dis_real - dis_prev < 0) // Khoang cach giam
+    {
+     check_ACC = 0;  
+     if(er > 0) // Khoang cach lon hon khoang cach cai dat 
+     {
+       if(check_increase==0) speed_car -= ACC_Kp/er; // Xe giam toc do theo sai so
+       if(speed_car<0) speed_car=0;
+     }else // Khoang cach nho hon khoang cach cai dat   
+     {
+       speed_car -= ACC_reduce; // Xe giam toc do cuong buc
+       if(speed_car < 0) speed_car = 0;
+     }
+    }
+    else // Khoang cach tang
+    {  
+       if(check_ACC == 1) dem_increase++;else dem_increase = 0;
+       if(dem_increase > 10) check_increase=1; // Xac dinh khoang cach tang  
+    }
+  }
+  
+  // Chuong tang toc xe sau khi stop neu khoang cach do duoc > 30 cm
+  if(dis_real < 60) check_ACC2 = 0;
+  else if(car_stop==1) 
+  {
+  in_range = 1;
+  if(check_ACC2 == 1) dem_out_dis++;else dem_out_dis = 0;
+  if(dem_out_dis > 10) // Xac dinh khoang cach > 30 cm 
+    {
+      car_stop = 0;dem_increase = 0;check_increase=0;
+      while(speed_car < speed_hold*2.5)
+      {
+        digitalWrite(li_rear,0);  
+        speed_car+= ACC_increase_stop; // Xe tang toc
+        Line_driving(speed_car);
+        dis_real = Distance(MID,6400);
+        if(dis_real < dis_hold)  {speed_car=0;digitalWrite(li_rear,1);car_stop=1;break;} // Xe dung khan cap
+        delay(2);
+      }
+      if(speed_car > 255) speed_car=255;
+    }
+  }
+  
+  // Chuong trinh tang toc xe khi xe truoc tang toc ra khoi gioi han detect
+  if(dis_real < dis_detect + 10) check_ACC2 = 0;
+  else //if(check_increase==1)
+  {
+  if(check_ACC3 == 1) dem_out_dis2++;else dem_out_dis2 = 0;
+  if(dem_out_dis2 > 70) // Xac dinh khoang cach tang khoi gioi han 
+    {
+      in_range = 0;
+      car_stop = 0;dem_increase = 0;check_increase=0;dem_out_dis2 = 0;
+    }
+  }
+  dis_prev = dis_real;
+ }
+ 
+ /* Chuong trinh dieu khien Cruise Control Ver 1.0 - 28/05/2017
+ * sp_hold: cai dat toc do (cm/s )
+ */
+ void CCS(byte sp_hold)
+ {
+  sp_L = en_L*(200/interval_CCS);           // Toc do banh xe trai
+  sp_R = en_R*(200/interval_CCS);           // Toc do banh xe phai
+  sp_tb = (sp_L + sp_R)/2.0;                // Toc do trung binh
+  sp = sp_tb;
+  Wifi_output();
+  CCS_out=CCS_out+(sp_hold-sp_tb)*CCS_Kp;   // CCS PI
+  if(CCS_out<0) CCS_out=0;
+  if(CCS_out>150) CCS_out=150;
+  en_L = 0;en_R = 0; 
+ }
+
+ // Chuong trinh doc to do xe gui len webserver Ver 1.0 - 08/07/2017
+ void sp_cal()
+ {
+   sp_R = en_R;
+   sp = sp_R;
+   if(Mode==0) dir = FORWARD;
+   Wifi_output();
+   en_R = 0; 
+ }
+ 
+/* Chuong trinh cho xe chay theo quang duong ket hop chop xinhan Ver 1.0 - 17/04/2017
+* en_ : chon encoder LEFT (3), RIGHT (4)
+* dis1 : quang duong can di chuyen (cm) tinh theo duong thang
+*/ 
+void Car_dis(byte en_,int dis1){
+  int en1,demxn;
+ if(en_==3){
+  en1=dis1*4.4; // Tinh so xung encoder theo quang duong
+  en_R=0;
+  while(en_R<en1){delayMicroseconds(1);} 
+  en_R=0;
+ }
+ if(en_==4){
+  en1=dis1*4.4; // Tinh so xung encoder theo quang duong
+  en_L=0;
+  while(en_L<en1)
+  {
+    demxn++;
+    if(xn==1 && demxn>30000) {ttxn=~ttxn;digitalWrite(li_L,ttxn);} // Chop tat xinhan trai
+    if(xn==2 && demxn>30000) {ttxn=~ttxn;digitalWrite(li_R,ttxn);} // Chop tat xinhan phai
+    if(demxn>30000) demxn=0;
+    delayMicroseconds(1);
+  } 
+  en_L=0;
+ }
+}
+
+ /* Chuong trinh lui xe co phanh khan cap ket hop chop xinhan Ver 1.0 - 30/06/2017
+ * Steer: huong re LEFT, RIGHT
+ * ag: goc lai
+ * spL: PWM banh xe trai (0-255)
+ * spR: PWM banh xe phai (0-255)
+ * dis1: doan duong lui xe (cm )
+ */
+void Backward_safe(byte Steer, byte ag, byte spL, byte spR, int dis1, byte P_)
+{
+  int demxn;
+  int en1=dis1*4.4; // Tinh so xung encoder theo quang duong
+  en_L=0;
+  while(en_L<en1)
+  {
+    Danger_rear = analogRead(HN); // Do khoang cach phia sau
+    demxn++;server_out = 0;
+    if(xn==1 && demxn>500) {ttxn=~ttxn;digitalWrite(li_L,ttxn);} // Chop tat xinhan trai
+    if(xn==2 && demxn>500) {ttxn=~ttxn;digitalWrite(li_R,ttxn);} // Chop tat xinhan phai
+    if(demxn>500) demxn=0;
+    while(Danger_rear > 600) // Khoang cach nguy hiem
+    {
+      server_out++;
+      if(server_out==1)
+      {
+      detail = 15;
+      Wifi_output();   // Gui du lieu len webserver 
+      }
+      digitalWrite(Horn,1);
+      Danger_rear = analogRead(HN);
+      if(Danger_rear <= 600) 
+      {
+         detail = P_;
+         Wifi_output();   // Gui du lieu len webserver
+      }
+      Car_moving(Steer,ag,BACKWARD,0,0); // Dung xe khan cap
+      delay(100);
+    }
+    digitalWrite(Horn,0);
+    Car_moving(Steer,ag,BACKWARD,spL,spR); // Xe tiep tuc lui 
+    delayMicroseconds(1);
+  } 
+  en_L=0;
+}
+
+// Chuong trinh tu do xe ben phai Ver 1.0 - 29/06/2017
+ void Auto_PR()
+ {
+     int ag1,demxn;
+     speed_car = 60*delta_V; // Cai dat toc do xe
+     if(dem_PR==0)           // Do xe tai vi tri R1
+     {
+       st = LEFT; ag = 0; dir = FORWARD; detail = 10;
+       Wifi_output();   // Gui du lieu len webserver 
+       
+       // Xe chay toi them 1 doan
+       en_L = 0;
+       while(en_L < 100) Line_driving(speed_car-10);// Xe chay thang do lai
+       sp = 0;
+       Wifi_output();    // Gui du lieu len webserver 
+       Car_moving(LEFT,0,FORWARD,0,0);delay(300);// Xe dung 300 ms
+       
+       // Xe lui trai
+       Steering_limit = 50;                                   // Cai dat gioi han goc lai
+       Car_moving(LEFT,17,BACKWARD,speed_car-10,speed_car-10);// Xe lui trai 17 do 
+       sp = 20;
+       Wifi_output();   // Gui du lieu len webserver 
+       xn = 1;digitalWrite(li_rear,1);                      // Bat xinhan trai
+       Backward_safe(LEFT,17,speed_car-10,speed_car-10,40,10);    // Lui xe 1 doan co phanh khan cap
+       xn = 0;digitalWrite(li_rear,0);digitalWrite(li_L,0); // Tat xinhan
+       Car_moving(LEFT,17,BACKWARD,0,0);delay(300);         // Xe dung 300 ms
+       
+       // Xe tien phai
+       Car_moving(RIGHT,43,FORWARD,speed_car,speed_car-10); // Xe tien phai 43 do
+       sp = 30;
+       Wifi_output();   // Gui du lieu len webserver 
+       xn = 2;                                              // Bat xinhan phai
+       Car_dis(LEFT,55);                                    // Xe doc encoder chay 1 doan
+       xn = 0;digitalWrite(li_R,0);                         // Tat xinhan
+       Car_moving(RIGHT,43,FORWARD,0,0);delay(300);         // Xe dung 300 ms
+
+       // Xe lui trai 1 doan nho
+       Car_moving(LEFT,40,BACKWARD,speed_car,speed_car);    // Xe lui trai 40 do 
+       Car_dis(LEFT,5);                                     // Xe doc encoder chay 1 doan
+     }
+     else // Xe do tai vi tri R2
+     {
+     st = LEFT; ag = 0; dir = FORWARD; detail = 11;
+     Wifi_output();   // Gui du lieu len webserver
+     Line_driving(0);delay(300);                            // Xe dung 300 ms
+
+     // Xe lui phai
+     Car_moving(RIGHT,1,BACKWARD,speed_car,speed_car);      // Xe lui phai 1 do
+     sp = 20;
+     Wifi_output();   // Gui du lieu len webserver
+     digitalWrite(li_rear,1);                               // Bat den sau
+     Backward_safe(RIGHT,1,speed_car-10,speed_car-10,34,11);      // Lui xe 1 doan co phanh khan cap
+     digitalWrite(li_rear,0);                               // Tat den sau
+     Car_moving(RIGHT,1,BACKWARD,0,0);delay(300);           // Xe dung 300 ms
+
+     // Xe tien trai
+     Car_moving(LEFT,40,FORWARD,speed_car-10,speed_car-10); // Xe tien trai 40 do
+     sp = 30;
+     Wifi_output();   // Gui du lieu len webserver
+     xn = 1;                                                // Bat xinhan trai
+     Car_dis(LEFT,11);                                      // Xe doc encoder chay 1 doan
+     xn = 0;digitalWrite(li_L,0);                           // Tat xinhan
+
+     // Xe tien phai
+     Car_moving(RIGHT,40,FORWARD,speed_car-10,speed_car-10);// Xe tien phai 40 do
+     sp = 30;
+     Wifi_output();   // Gui du lieu len webserver
+     xn = 2;                                                // Bat xinhan phai
+     Car_dis(LEFT,25);                                      // Xe doc encoder chay 1 doan
+     xn = 0;digitalWrite(li_R,0);                           // Tat xinhan
+     Car_moving(RIGHT,40,FORWARD,0,0);delay(300);           // Xe dung 300 ms
+
+     // Xe lui trai
+     Car_moving(LEFT,40,BACKWARD,speed_car-10,speed_car-10);      // Xe lui trai 40 do
+     sp = 20;
+     Wifi_output();   // Gui du lieu len webserver
+     xn = 1;digitalWrite(li_rear,1);                        // Bat xinhan trai
+     Backward_safe(LEFT,40,speed_car,speed_car,15,11);         // Lui xe 1 doan co phanh khan cap
+     xn = 0;digitalWrite(li_rear,0);digitalWrite(li_L,0);   // Tat xinhan
+     Car_moving(LEFT,40,BACKWARD,0,0);delay(300);           // Xe dung 300 ms
+
+     // Xe tien phai
+     Car_moving(RIGHT,40,FORWARD,speed_car,speed_car);      // Xe tien phai 40 do
+     sp = 30;
+     Wifi_output();   // Gui du lieu len webserver
+     xn = 2;                                                // Bat xinhan phai
+     Car_dis(LEFT,15);                                      // Xe doc encoder chay 1 doan
+     xn = 0;                                                // Tat xinhan
+     ag1 = 40;en_L=0;Mid_L = 34;
+     Steering_limit = 50; // Cai dat goc lai gioi han
+     while(en_L < 195)    // Xe re phai tang cuong
+      {
+        demxn++;
+        if(demxn>5) {ttxn=~ttxn;digitalWrite(li_R,ttxn);demxn=0;} //Bat xinhan phai
+        Car_moving(RIGHT,ag1,FORWARD,speed_car,speed_car);
+        Pixel = myCam.read();
+        Camera_line_detect(deltaL,deltaR);
+        if(detect_val_L > 0)
+        {
+        if(detect_val_L > Mid_L) ag1= (detect_val_L-Mid_L)*15; 
+        }
+      }
+     digitalWrite(li_R,0);                             // Tat xinhan phai
+     Car_moving(RIGHT,40,FORWARD,0,0);delay(300);      // Xe dung 300 ms     
+     Car_moving(LEFT,40,BACKWARD,speed_car,speed_car); // Xe lui trai 40 do
+     Car_dis(LEFT,6);                                  // Xe doc encoder chay 1 doan nho
+     }
+     digitalWrite(li_head,0);                          // Tat den truoc  
+     ag = 0; dir = FORWARD; sp = 0; detail = 14;
+     Wifi_output();   // Gui du lieu len webserver                         
+     Line_driving(0);while(1){};                       // Dung xe
+ }
+
+ // Chuong trinh tu do xe ben trai Ver 1.0 - 29/06/2017
+ void Auto_PL()
+ {
+   int ag1;
+   speed_car = 60*delta_V;      // Cai dat toc oo xe
+   if(dem_PL==0)                 // Xe do tai vi tri L1
+   {
+     st = LEFT; ag = 0; dir = FORWARD; detail = 12;
+     Wifi_output();   // Gui du lieu len webserver
+     Line_driving(0);delay(300); // Xe dung 300 ms
+
+     // Xe lui phai
+     Car_moving(RIGHT,24,BACKWARD,speed_car-10,speed_car-10);   // Xe lui phai 24 do
+     sp = 20;
+     Wifi_output();   // Gui du lieu len webserver
+     xn = 2;digitalWrite(li_rear,1);                      // Bat xinhan phai
+     Backward_safe(RIGHT,24,speed_car-10,speed_car-10,27,12);   // Xe lui 1 doan co phanh khan cap
+     xn = 0;digitalWrite(li_rear,0);digitalWrite(li_R,0); // Tat xinhan
+     Car_moving(RIGHT,24,BACKWARD,0,0);delay(300);        // Xe dung 300 ms
+
+     // Xe tien trai
+     Car_moving(LEFT,35,FORWARD,speed_car,speed_car+20);  // Xe tien trai 35 do
+     sp = 30;
+     Wifi_output();   // Gui du lieu len webserver
+     xn = 1;                                              // Bat xinhan trai
+     Car_dis(LEFT,53);                                    // Xe doc encoder chay 1 doan
+     xn = 0;digitalWrite(li_L,0);                         // Tat xinhan
+   }else                          // Xe do tai vi tri L2
+   {
+     st = LEFT; ag = 0; dir = FORWARD; detail = 13;
+     Wifi_output();   // Gui du lieu len webserver
+     Line_driving(0);delay(300);                          // Xe dung 300 ms
+
+     // Xe lui phai
+     Car_moving(RIGHT,10,BACKWARD,speed_car,speed_car);   // Xe lui phai 10 do
+     sp = 20;
+     Wifi_output();   // Gui du lieu len webserver
+     digitalWrite(li_rear,1);                             // Bat den sau
+     Backward_safe(RIGHT,10,speed_car-10,speed_car-10,20,13);   // Xe lui 1 doan co phanh khan cap
+     digitalWrite(li_rear,0);                             // Tat den sau
+     Car_moving(RIGHT,10,BACKWARD,0,0);delay(300);        // Xe dung 300 ms
+
+     // Xe tien trai
+     Car_moving(LEFT,45,FORWARD,speed_car,speed_car);     // Xe tien trai 40 do
+     sp = 30;
+     Wifi_output();   // Gui du lieu len webserver
+     xn = 1;                                              // Bat xinhan trai
+     Car_dis(LEFT,50);                                    // Xe doc encoder chay 1 doan
+     xn = 0;digitalWrite(li_L,0);                         // Tat xinhan
+   }
+   ag = 0; dir = FORWARD; sp = 0; detail = 14;
+   Wifi_output();   // Gui du lieu len webserver 
+   digitalWrite(li_head,0);                               // Tat den truoc
+   Line_driving(0);while(1){};                            // Dung xe
+ }
+
+ // Chuong trinh tim khoang trong do xe phu hop Ver 1.0 - 28/06/2017
+ void Find_space()
+ {
+    disR = Distance(RIGHT,6000);                                      // Do khoang cach ben phai
+    if(disR > 40 && Find_PR==0) {Find_PR = 1;SpaceR = 0;DangerR = 0;} // Reset thong so
+    if(Find_PR==1)                             // Tim khoang trong ben phai
+    {
+        disR = Distance(RIGHT,6000);           // Do khoang cach ben phai
+        if(disR > 40) SpaceR++;                // Khoang trong
+        else DangerR++;                        // Vat can
+        if(DangerR>10) {Find_PR = 0;dem_PR++;} // Xac dinh co vat can
+        if(SpaceR > 22) P_pos = 1;             // Xac dinh co khoang trong phu hop
+    }
+    disL = Distance(LEFT,6000);                                       // Do khoang cach ben trai
+    if(disL > 60 && Find_PL==0) {Find_PL = 1;SpaceL = 0;DangerL = 0;} // Reset thong so
+    if(Find_PL==1)// Tim khoang trong ben trai
+    {
+        disL = Distance(LEFT,6000);            // Do khoang cach ben trai
+        if(disL > 60) SpaceL++;                // Khoang trong
+        else DangerL++;                        // Vat can
+        if(DangerL>10) {Find_PL = 0;dem_PL++;} // Xac dinh co vat can
+        if(SpaceL > 22) P_pos = 2;             // Xac dinh co khoang trong phu hop
+    }
+    if(P_pos == 1) Auto_PR();                  // Tu dong do xe ben phai
+    else if(P_pos == 2) Auto_PL();             // Tu dong do xe ben trai
+ }
+ 
+ ////////////////////////////// Chuong trinh dieu khien xe chay theo duong dua Ver 1.0 - 01/7/2017
+ void Race_track_move()
+ { 
+    int ag1,dis,dem_out,demxn;
+    if(pos==1) 
+    {
+      Mid_L = 28; Mid_R = 88;  // Cai thong so tai pos1
+      digitalWrite(li_head,1); // Bat den truoc
+      server_out++;
+      if(server_out==1)
+      {
+        st = LEFT; ag = 0; dir = FORWARD; detail = 1;
+        Wifi_output();   // Gui du lieu len webserver 
+      }
+    } 
+
+    // Chuong trinh xu ly khi phat hien lai trang ngang
+    if(Horizon_line==1)
+    {
+      switch (pos)
+      {
+        // Lai ngang tiep giap doc cau 
+        case 1: 
+          Car_dis(LEFT,22);
+          pos++;
+        break;
+
+        // Lai ngang truoc khi len doc
+        case 6: 
+          pos++;
+          //speed_car -= 10;               // Xe giam toc do
+          delay(100);
+          gain = 0.6;W_line_detect = 35; // Tang do nhay phat hien lai trang ngang 
+          en_L = 1400;
+          en_R = 1400;
+          digitalWrite(li_R,0);
+        break;
+
+        // Lai ngang sau khi len doc
+        case 7: 
+          delay(100);
+          Car_moving(LEFT,31,FORWARD,speed_car-20,speed_car); // Xe re trai 31 do
+          st = LEFT; ag = 31; dir = FORWARD; detail = 7;
+          Wifi_output();   // Gui du lieu len webserver 
+          xn = 1;                                          // Bat xinhan trai
+          Car_dis(LEFT,79);                                // Xe doc encoder chay 1 doan
+          xn = 0;digitalWrite(li_L,0);                     // Tat xinhan
+          gain = 0.6;W_line_detect = 50;                   // Giam do nhay phat hien lai trang ngang 
+          speed_car -= 90;                                 // Xe giam toc do
+          pos++;server_out = 0;
+        break;
+
+        // Lai ngang truoc bai do xe
+        case 8:
+          st = LEFT; ag = 0; dir = FORWARD; detail = 9;
+          Wifi_output();   // Gui du lieu len webserver 
+          dem_lineP++;
+          pos++;server_out = 0;
+        break;
+      } 
+    }
+
+    // Lai ngang xuong doc cau
+    if(pos==2)
+    {
+          Steering_limit = 50;
+          ag1 = 41;en_L=0;demxn=0;
+          st = LEFT; ag = 40; dir = FORWARD; detail = 2;
+          Wifi_output();   // Gui du lieu len webserver 
+          while(en_L < 190)
+          {
+             demxn++;
+             if(demxn>2) {ttxn=~ttxn;digitalWrite(li_L,ttxn);demxn=0;}   // Bat xinhan trai
+             Car_moving(LEFT,ag1,FORWARD,speed_car-50,speed_car);        // Xe re trai 
+             Pixel = myCam.read();
+             Camera_line_detect(deltaL,deltaR);
+             if(detect_val_R > 0)
+             {
+                if(detect_val_R < Mid_R) ag1+= (Mid_R - detect_val_R)*1; // Xe re trai tang cuong  
+             }
+          }
+          st = LEFT; ag = 0; dir = FORWARD; detail = 3;
+          Wifi_output();   // Gui du lieu len webserver 
+          digitalWrite(li_L,0);           // Tat xinhan trai
+          pos++;
+    }
+        
+    // Xe xuong doc 
+    if(pos==3) 
+    {
+      en_L = 0;
+      speed_car += 10;                                      // Xe tang toc 
+      while(en_L < 200) {Line_driving(speed_car);delay(2);} // Xe chay 1 doan
+      speed_car += 50;                                      // Xe tiep tuc tang toc
+      Steering_limit = 50;                                  // Cai dat goc lai gioi han
+      Mid_L = 35; Mid_R = 93;                               // Cai dat gia tri scale do lai
+      pos++;dem_s=0;
+    }
+    
+    // Xe chay do lai ket hop phat hien vat can
+    if(pos==4) dem_s++;
+    if(pos==4 && dem_s>50) 
+    {
+     dis = Distance(MID,6000); // Do khoang cach phia truoc
+     if(dis>45 && dis<55)      // Vat can nam trong gioi han phat hien
+     {
+       Mid_L = 32; Mid_R = 91;
+       Car_moving(LEFT,30,FORWARD,speed_car,speed_car); // Xe re trai 30 do
+       st = LEFT; ag = 30; dir = FORWARD; detail = 4;
+       Wifi_output();   // Gui du lieu len webserver 
+       xn = 1;                                          // Bat xinhan trai
+       Car_dis(LEFT,17);//17                            // Xe doc encoder chay 1 doan
+       xn = 0;digitalWrite(li_L,0);                     // Tat xinhan
+       pos++;
+     }
+    }
+    
+    // Xe vuot qua vat can
+    if(pos==5)
+    {
+      en_L = 0;
+      st = LEFT; ag = 0; dir = FORWARD; detail = 4;
+      Wifi_output();   // Gui du lieu len webserver 
+      while(en_L < 200)
+      {
+        Line_driving(speed_car);         // Xe chay do lai 1 doan
+      }
+      dem_out = 0;
+      while(dem_out<5)                   // Xac dinh vuot qua vuot can
+      {
+        dis = Distance(RIGHT,6000);      // Do khoang cach ben phai
+        if(dis>50) dem_out++;
+        Line_driving(speed_car);
+      }
+      Mid_L = 35; Mid_R = 93;
+      Car_moving(RIGHT,30,FORWARD,speed_car,speed_car); // Xe re phai 30 do
+      st = RIGHT; ag = 30; dir = FORWARD; detail = 5;
+      Wifi_output();   // Gui du lieu len webserver 
+      xn = 2;                                           // Bat xinhan phai
+      Car_dis(LEFT,18);//18                             // Xe doc encoder chay 1 doan
+      xn = 0;digitalWrite(li_R,0);                      // Tat xinhan
+      st = LEFT; ag = 0; dir = FORWARD; detail = 6;
+      Wifi_output();   // Gui du lieu len webserver 
+      pos++;en_L=0;
+    }
+
+    // Xe vao doan duong cong sau khi vuot qua vat can
+    if(pos==6 && en_L>900)
+    {
+      digitalWrite(li_R,1);          // Bat xinhan phai
+      gain = 0.6;W_line_detect = 40; // Dieu chinh do nhay phat hien lai trang
+      Mid_L = 26; Mid_R = 86;        // Dieu chinh scale do lai lech phai
+    }
+
+    // Xe chay tren duong vao bai do
+    if(pos==8)
+    {
+      server_out++;
+      if(server_out == 1)
+      {
+      st = LEFT; ag = 0; dir = FORWARD; detail = 8;
+      Wifi_output();   // Gui du lieu len webserver 
+      }
+      Mid_L = 38; Mid_R = 98;               // Dieu chinh scale do lai lech trai
+      gain = 0.6;W_line_detect = 30;
+      speed_car -= (sp_tb-speed_hold)*0.12; // PI Cruise Control
+    }
+    
+    if(dem_lineP > 0) dem_lineP++; // Tru hao lai ngang truoc bai do de bat dau tim khoang trong
+    if(dem_lineP > 10) 
+    {
+      server_out++;
+      if(server_out==1)
+      {
+      st = LEFT; ag = 0; dir = FORWARD; detail = 9;
+      Wifi_output();   // Gui du lieu len webserver 
+      }
+      Auto_P = 1; // Kich hoat chuc nang tu do xe
+    }
+ }
+
+ // Chuong trinh doc nut nhan Ver 1.0 - 02/07/2017
+ void Read_button()
+ {
+  check_point = analogRead(CP); // Doc nut nhan checkpoint 
+  if(check_point < 10)          // Xe xuat phat tai checkpoint 1
+  {
+    speed_car += 70; 
+    pos = 4; 
+    Steering_limit = 50;
+    Mid_L = 35; Mid_R = 93;  
+    digitalWrite(li_head,1);
+  }
+  if(check_point > 450 && check_point < 550) // Xe xuat phat tai checkpoint 2
+  {
+    speed_car += 70; 
+    pos = 6; 
+    en_L = 1001;
+    digitalWrite(li_head,1);
+  }
+ }
+ 
+ /* Chuong trinh xu ly nut nhan chuc nang wifi Ver 1.0 - 10/07/2017
+  * Neu nhan < 0.5s: thuc hien chuc nang reset ESP8266
+  * Neu nhan > 0.5s: thuc hien chuc nang Disable Actuator
+  */
+void Wifi_button()
+{
+  if(analogRead(CP) < 400 && analogRead(CP) > 300)
+  {
+    delay(500);
+    if(analogRead(CP) < 400 && analogRead(CP) > 300)
+    {
+     while(1)
+        {
+          Car_moving(LEFT,0,FORWARD,0,0);
+          delay(1000);
+          if(analogRead(CP) < 400 && analogRead(CP) > 300) break;
+        }
+    }
+    else
+    {
+      digitalWrite(wifi_reset,0);
+      digitalWrite(Horn,1);
+      delay(200);
+      digitalWrite(wifi_reset,1);
+      digitalWrite(Horn,0);
+    }
+  }
+}
+
+// Chuong trinh nhan du lieu tu Webserver Ver 1.0 - 09/07/2017
+void Wifi_input()
+{
+  if(Serial1.available()) 
+  {
+     input = Serial1.read();
+     output+= input;
+     if(input=='}') 
+     {
+     Serial.println(output);
+     DynamicJsonBuffer jsonBuffer;
+     JsonObject& root = jsonBuffer.parseObject(output);
+     temp = root["Mode"];if(temp!=0) Mode = temp;
+     temp = root["Move"];if(temp!=0) Move = temp;
+     output = "";
+     }
+  }
+}
+
+// Chuong trinh gui du lieu qua wifi len Webserver Ver 1.0 - 09/07/2017
+void Wifi_output()
+{
+  bool dir_;
+  byte ag_;
+  if(dir==2) dir_ = 1;else dir_ = 0;
+  if(ag>Steering_limit) ag=Steering_limit; 
+  if(st == LEFT) ag_ = 50 - ag; 
+  else ag_ = 50 + ag; 
+  
+  StaticJsonBuffer<100> jsonBuffer;
+  JsonObject& root = jsonBuffer.createObject();
+  JsonArray& data = root.createNestedArray("data");
+  data.add(rnd2(voltage));
+  data.add(dir_);
+  data.add(ag_);
+  data.add(sp);
+  data.add(detail);
+  if(Mode==2) data.add(dis1);
+  root.printTo(Serial1);
+}
+
+// Chuong trinh doc dien ap pin Ver 1.0 - 10/07/2017
+void Read_voltage()
+{
+  dem_vol++;
+  tong_vol += analogRead(batt_vol)*0.01193;
+  if(dem_vol > 99) 
+  {
+  voltage = tong_vol/100;
+  dem_vol = 0;
+  tong_vol = 0;
+  }
+}
+
+// Chuong trinh lam tron 2 chu so thap phan Ver 1.0 - 05/07/2017
+// x: Bien dau vao
+String rnd2(float x)
+{
+  int a = x*100;
+  int b = a/100;
+  int c = a%100;
+  String val = String(b) + "." + String(c);
+  return val;
+}
+// Chuong trinh cho xe chay che do Adaptive Cruise Control Ver 1.0 - 11/07/2017
+void ACC_mode(){
+  if(in_range==1) Line_driving(speed_car); // Xe giam toc do
+  else Line_driving(CCS_out);              // Xe chay cruise control
+  ACC(20,speed_hold);                      // Phat hien xe phia truoc
+}
+
+// Chuong trinh cho xe chay che do Race Track Ver 1.0 - 11/07/2017
+void RT_mode()
+{
+  Line_driving(speed_car);    // Chay chuong trinh do lai
+  if(Auto_P==1) Find_space(); // Chay chuong trinh tim khoang trong
+  Race_track_move();          // Chuong trinh chay theo duong dua tu Start
+}
+
+// Chuong trinh cho xe chay che do Auto Parking Ver 1.0 - 11/07/2017
+void AP_mode()
+{
+  Line_driving(speed_car);    // Chay chuong trinh do lai
+  if(Auto_P==1) Find_space(); // Chay chuong trinh tim khoang trong
+  Race_track_move();          // Chuong trinh chay theo duong dua tu checkpoint 2
+}
+
+// Chuong trinh kiem tra che do duoc chon Ver 1.0 - 11/07/2017
+void Mode_check()
+{
+      Wifi_input(); // Doc du lieu tu webserver
+      if(Mode==1)   // Race Track
+      {
+        st = LEFT; ag = 0; dir = FORWARD; detail = 16;
+        Wifi_output();   // Gui du lieu len webserver 
+        while(Move!=1)
+        {
+          Wifi_input();
+          delay(2);
+        }
+      }
+      if(Mode==2) // Adaptive Cruise Control
+      {
+        st = LEFT; ag = 0; dir = FORWARD; detail = 17;
+        Wifi_output();   // Gui du lieu len webserver
+        speed_hold = 60; speed_car = 100; pos = 9; interval_CCS = 200;
+        digitalWrite(li_head,1);
+        while(Move!=1)
+        {
+          Wifi_input();
+          delay(2);
+        }
+      }
+      if(Mode==3) // Auto Parking
+      {
+        st = LEFT; ag = 0; dir = FORWARD; sp = 0; detail = 18;
+        Wifi_output();   // Gui du lieu len webserver 
+        speed_car += 70; 
+        pos = 6; 
+        en_L = 1001;
+        digitalWrite(li_head,1);
+        while(Move!=1)
+        {
+          Wifi_input();
+          delay(2);
+        }
+      }
+}
+
+// Chuong trinh kiem tra nhan nut STOP Ver 1.0 - 11/07/2017
+void Stop_check()
+{
+  Wifi_input();
+  if(Move==2)
+  {
+    Car_moving(LEFT,0,FORWARD,0,0); // Xe dung
+    sp = 0; detail = 19;
+    Wifi_output();   // Gui du lieu len webserver 
+    while(Move!=1)
+    {
+       Wifi_input();
+       delay(2);
+    }
+  }
+}
+
+// Chuong trinh giao tiep webserver Ver 1.0 - 11/07/2017
+void Webserver_run()
+{
+    if(Mode==0) Mode_check(); // Kiem tra che do hoat dong cua xe duoc chon
+    if(Mode==1)    // Race Track
+    {
+      RT_mode();    
+      Stop_check();// Kiem tra dung xe
+    }
+    if(Mode==2)    // Adaptive Cruise Control
+    {
+      ACC_mode();
+      Stop_check();// Kiem tra dung xe
+    }
+    if(Mode==3)    // Auto Parking
+    {
+      AP_mode();
+      Stop_check();// Kiem tra dung xe
+    }
+}
+
+//-------------------------------------------------------------------------------------------------
+// Chuong trinh chinh
+void setup() {
+  Serial.begin(9600);    // Khoi tao giao tiep serial voi may tinh de xuat cac du lieu can thiet
+  Serial1.begin(115200); // Khoi tao giao tiep module wifi ESP8266
+  Serial.println("---Autonomous Car Controler---");
+  Set_up_DCmotor();    // Cai dat 2 dong co DC
+  Set_up_servo();      // Cai dat dong co servo
+  Set_up_encoder();    // Cai dat encoder
+  Set_up_light_horn(); // Cai dat den va coi
+  Set_up_cbsa();       // Cai dat cam bien sieu am
+  Set_up_PID();        // Thiet lap PID Linedriving
+  Set_up_wifi();       // Cai dat wifi
+  //delay(7000);         // Cho wifi ket noi
+  speed_car = speed_car*delta_V; // Tinh toc do xe theo he so dien ap pin
+  Read_button();       // Doc nut nhan
+}
+
+void loop() {
+  //////////////////////////////////////// Cruise control system interval
+  unsigned long currentMillis = millis();
+  if ((unsigned long)(currentMillis - previousMillis) >= interval_CCS) {
+    if(pos == 8 || Mode == 2) CCS(speed_hold);
+  previousMillis = currentMillis;  
+  }
+  //////////////////////////////////////// Car moving interval
+  if ((unsigned long)(currentMillis - previousMillis2) >= 2) {
+    Webserver_run();            // Chay chuong trinh giao tiep webserver
+    //Mode = 1;                 // Kich hoat che do Race Track khong can Webserver
+    Wifi_button();              // Nut nhan thuc hien chuc nang wifi
+    Read_voltage();             // Doc dien ap pin
+  previousMillis2 = currentMillis;  
+  }
+  //////////////////////////////////////// Wifi function interval
+  if ((unsigned long)(currentMillis - previousMillis3) >= 200) {
+    if(pos < 8) sp_cal();
+  previousMillis3 = currentMillis;  
+  }
+}
